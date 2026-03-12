@@ -13,7 +13,9 @@ The experiments are based on several datasets:
 ## Authors
 
 Bc. Dominik Hofman
+
 Bc. Lucie Jadrná
+
 Bc. Vítězslav Cupl
 
 Supervisor: Ing. Marek Vaško
