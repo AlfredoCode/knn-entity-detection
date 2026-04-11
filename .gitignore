@@ -1,2 +1,4 @@
 resources/cnec2.0
 resources/HistoricalNERData
+
+__pycache__
