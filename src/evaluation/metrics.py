@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Dict, Set, Tuple, List
+from typing import Dict, Set, Tuple, List, Sequence, Optional
 
 Entity = Tuple[int, int, str] # (start, end, label)
 
@@ -64,7 +64,7 @@ def parse_cnec_entity(entity_str: str) -> List[Entity]:
     return entities
 
 def get_plain_text_cnec(entity_str: str) -> str:
-    result = List[str] = []
+    result: List[str] = []
     i, stack_depth = 0, 0
     entity_len = len(entity_str)
     while i < entity_len:
@@ -87,3 +87,58 @@ def get_plain_text_cnec(entity_str: str) -> str:
         result.append(entity_char)
         i += 1
     return "".join(result)
+
+def parse_bioes_tags(tags: Sequence[str]) -> List[Entity]:
+    entities: List[Entity] = []
+    start: Optional[int] = None
+    current_label: Optional[str] = None
+
+    for idx, tag in enumerate(tags):
+        if tag == "O" or tag == "o":
+            if current_label is not None:
+                entities.append((start, idx, current_label))
+                start, current_label = None, None
+            continue
+
+        parts = tag.split("-", 1)
+        if len(parts) != 2:
+            if current_label is not None:
+                entities.append((start, idx, current_label))
+                start, current_label = None, None
+            continue
+
+        prefix, label = parts
+
+        if prefix in ("B", "b"):
+            if current_label is not None:
+                entities.append((start, idx, current_label))
+            start, current_label = idx, label
+
+        elif prefix in ("I", "i"):
+            if current_label is None or label != current_label:
+                if current_label is not None:
+                    entities.append((start, idx, current_label))
+                start, current_label = idx, label
+
+        elif prefix in ("E", "e"):
+            if current_label is not None and label == current_label:
+                entities.append((start, idx + 1, current_label))
+            else:
+                entities.append((idx, idx + 1, label))
+            start, current_label = None, None
+
+        elif prefix in ("S", "s"):
+            if current_label is not None:
+                entities.append((start, idx, current_label))
+            entities.append((idx, idx + 1, label))
+            start, current_label = None, None
+
+        else:
+            if current_label is not None:
+                entities.append((start, idx, current_label))
+                start, current_label = None, None
+
+    if current_label is not None:
+        entities.append((start, len(tags), current_label))
+
+    return entities
