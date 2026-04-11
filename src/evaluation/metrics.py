@@ -1,5 +1,6 @@
 from __future__ import annotations
 from typing import Dict, Set, Tuple, List, Sequence, Optional
+from dataclasses import dataclass
 
 Entity = Tuple[int, int, str] # (start, end, label)
 
@@ -142,3 +143,41 @@ def parse_bioes_tags(tags: Sequence[str]) -> List[Entity]:
         entities.append((start, len(tags), current_label))
 
     return entities
+
+def _exact_match(gold: Entity, pred: Entity) -> bool:
+    return gold[0] == pred[0] and gold[1] == pred[1] and gold[2] == pred[2]
+
+
+def _type_match(gold: Entity, pred: Entity) -> bool:
+    return gold[2] == pred[2]
+
+
+def _span_overlap(gold: Entity, pred: Entity) -> bool:
+    return gold[0] < pred[1] and pred[0] < gold[1]
+
+
+def _partial_match(gold: Entity, pred: Entity) -> bool:
+    return _span_overlap(gold, pred) and _type_match(gold, pred)
+
+@dataclass
+class EntityMetrics:
+    tp: int = 0
+    fp: int = 0
+    fn: int = 0
+
+    @property
+    def precision(self) -> float:
+        return self.tp / (self.tp + self.fp) if (self.tp + self.fp) > 0 else 0.0
+
+    @property
+    def recall(self) -> float:
+        return self.tp / (self.tp + self.fn) if (self.tp + self.fn) > 0 else 0.0
+
+    @property
+    def f1(self) -> float:
+        p, r = self.precision, self.recall
+        return 2 * p * r / (p + r) if (p + r) > 0 else 0.0
+
+    @property
+    def support(self) -> int:
+        return self.tp + self.fn
