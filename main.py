@@ -1,6 +1,6 @@
 import argparse
 from src.data.loader_cnec import LoaderCnec
-
+from src.data.mapper import Mapper
 
 def run(dataset_type: str, dpath: str):
     dataset_type = dataset_type.upper()
@@ -11,25 +11,44 @@ def run(dataset_type: str, dpath: str):
             print("Loading CNEC datasets...")
 
             loader = LoaderCnec(dpath)
-            model = loader.load()
+            sentences = loader.load()
 
-            print("Loaded datasets:", len(model))
+            print(f"Loaded sentences: {len(sentences)}")
 
             out_path = "out_cnec.log"
+            broken = 0
+
+            mapper = Mapper()
 
             with open(out_path, "w", encoding="utf-8") as f:
-                for i in range(len(model)):
-                    for token, labels in model.to_bioes(i):
-                        f.write(f"{token}\t{labels}\n")
-                    f.write("\n")
+                for tokens, labels in sentences:
 
-            print(f"BIO dataset written to {out_path}")
+                    if not tokens:
+                        continue
 
+                    if len(tokens) != len(labels):
+                        continue
+
+                    flat = []
+
+                    for t, l in zip(tokens, labels):
+
+                        if l == "O":
+                            internal = "O"
+                        else:
+                            base = l.split("-", 1)[1]  # remove BIOES prefix
+                            internal = mapper.CNEC_TO_INTERNAL.get(base, "O")
+
+                        flat.append(t)
+                        flat.append(internal)
+
+                    f.write(" ".join(flat) + "\n")
+
+            print(f"BROKEN sentences skipped: {broken}")
+            print(f"BIOES dataset written to {out_path}")
         case "HISTORICAL":
-            raise NotImplementedError("HISTORICAL loader not implemented yet")
-
-        case _:
-            raise ValueError(f"Unknown dataset type: {dataset_type}")
+            # TODO
+            pass
 
 
 def parse_args():
@@ -45,7 +64,7 @@ def parse_args():
     parser.add_argument(
         "-P", "--path",
         required=True,
-        help="Path to dataset / folder of datasets"
+        help="Path to dataset file or folder"
     )
 
     return parser.parse_args()
