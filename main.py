@@ -45,7 +45,7 @@ def parse_args():
     parser.add_argument(
         "-P", "--path",
         required=True,
-        help="Path to dataset"
+        help="Path to dataset / folder of datasets"
     )
 
     return parser.parse_args()
