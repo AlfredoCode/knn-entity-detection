@@ -1,127 +1,120 @@
-import os
 import re
-import xml.etree.ElementTree as ET
-
-from src.models.cnec_model import CnecModel
 
 
 class LoaderCnec:
+    """
+    @brief Loader for the CNEC XML-like annotated dataset.
+
+    This class reads a CNEC-formatted file where named entities are annotated
+    using <ne type="..."> ... </ne> tags. It converts each line into a sequence
+    of tokens and BIOES labels.
+    """
+
     def __init__(self, path: str):
+        """
+        @brief Initializes the loader with a file path.
+
+        @param path  Path to the CNEC dataset file.
+        """
         self.path = path
 
-    def load(self) -> CnecModel:
-        model = CnecModel()
+    def load(self):
+        """
+        @brief Loads and parses the entire dataset file.
 
-        if not os.path.exists(self.path):
-            raise FileNotFoundError(f"Dataset path not found: {self.path}")
+        Reads the file line by line, skipping XML document tags, and converts
+        each annotated line into (tokens, labels) pairs.
 
-        files = self._collect_files(self.path)
+        @return List of tuples (tokens, labels), where:
+                - tokens: list of token strings
+                - labels: list of BIOES labels aligned with tokens
+        """
+        sentences = []
 
-        for file in files:
-            sentences = self._parse_file(file)
+        with open(self.path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
 
-            for tokens, entities in sentences:
-                model.add_sentence(tokens, entities)
+                # skip XML header
+                if not line or line.startswith("<doc") or line.startswith("</doc"):
+                    continue
 
-        return model
+                tokens, labels = self._parse_line(line)
+                if tokens:
+                    sentences.append((tokens, labels))
 
-    # -------------------------
-    # File collection
-    # -------------------------
-    def _collect_files(self, path: str):
-        if os.path.isfile(path):
-            # single file case
-            if path.endswith(".xml") or path.endswith(".sgml"):
-                return [path]
-            else:
-                raise ValueError(f"Unsupported file type: {path}")
+        return sentences
 
-        if os.path.isdir(path):
-            out = []
-            for root, _, files in os.walk(path):
-                for f in files:
-                    if f.endswith(".xml") or f.endswith(".sgml"):
-                        out.append(os.path.join(root, f))
-            return out
+    def _parse_line(self, line: str):
+        """
+        @brief Parses a single annotated line into tokens and BIOES labels.
 
-        raise FileNotFoundError(f"Path not found: {path}")
+        Detects <ne type="X"> ... </ne> spans, tokenizes both entity and
+        non-entity text, and assigns BIOES labels accordingly.
 
-    # -------------------------
-    # Parse file
-    # -------------------------
-    def _parse_file(self, filepath: str):
-        tree = ET.parse(filepath)
-        root = tree.getroot()
-
-        tokens, entities = self._parse_document(root)
-
-        if not tokens:
-            return []
-
-        return [(tokens, entities)]
-
-    # -------------------------
-    # Core XML parsing (NESTING SAFE)
-    # -------------------------
-    def _parse_document(self, root):
+        @param line  A raw line from the dataset.
+        @return (tokens, labels) where:
+                - tokens: list of token strings
+                - labels: list of BIOES labels
+        """
         tokens = []
-        entities = []
+        labels = []
 
-        buffer = []
-        entity_stack = []  # (label, start_token_idx)
+        pattern = re.compile(r"<ne type=\"(.*?)\">(.*?)</ne>")
+        pos = 0
 
-        def flush_buffer():
-            nonlocal buffer, tokens
-            if buffer:
-                text = "".join(buffer)
-                words = self._tokenize(text)
-                tokens.extend(words)
-                buffer.clear()
+        for match in pattern.finditer(line):
+            start, end = match.span()
 
-        def walk(node):
-            nonlocal buffer, entities
+            # BEFORE ENTITY
+            before = line[pos:start]
+            before_tokens = self._tokenize(before)
 
-            # normal text
-            if node.text:
-                buffer.append(node.text)
+            tokens.extend(before_tokens)
+            labels.extend(["O"] * len(before_tokens))
 
-            for child in node:
-                if child.tag == "ne":
-                    # flush text before entity starts
-                    flush_buffer()
+            # ENTITY
+            ent_type = match.group(1)
+            ent_text = match.group(2)
+            ent_tokens = self._tokenize(ent_text)
 
-                    label = child.attrib.get("type", "UNK")
-                    start_idx = len(tokens)
+            if len(ent_tokens) == 1:
+                tokens.append(ent_tokens[0])
+                labels.append(f"S-{ent_type}")
+            else:
+                for i, t in enumerate(ent_tokens):
+                    tokens.append(t)
 
-                    entity_stack.append((label, start_idx))
+                    if i == 0:
+                        labels.append(f"B-{ent_type}")
+                    elif i == len(ent_tokens) - 1:
+                        labels.append(f"E-{ent_type}")
+                    else:
+                        labels.append(f"I-{ent_type}")
 
-                    # recurse into nested entity
-                    walk(child)
+            pos = end
 
-                    # flush inside entity
-                    flush_buffer()
+        # TAIL
+        tail = line[pos:]
+        tail_tokens = self._tokenize(tail)
 
-                    label, start = entity_stack.pop()
-                    end = len(tokens) - 1
+        tokens.extend(tail_tokens)
+        labels.extend(["O"] * len(tail_tokens))
 
-                    # VALID SPAN
-                    if start <= end:
-                        entities.append((start, end, label))
+        # sanity check
+        assert len(tokens) == len(labels), f"ALIGN ERROR {len(tokens)} vs {len(labels)}"
 
-                else:
-                    walk(child)
+        return tokens, labels
 
-                # tail text (important for XML correctness)
-                if child.tail:
-                    buffer.append(child.tail)
-
-        walk(root)
-        flush_buffer()
-
-        return tokens, entities
-
-    # -------------------------
-    # Tokenizer
-    # -------------------------
     def _tokenize(self, text: str):
+        """
+        @brief Tokenizes text into words and punctuation.
+
+        Uses a regex that splits into:
+        - word characters (\\w+)
+        - single punctuation characters ([^\\w\\s])
+
+        @param text  Raw text fragment.
+        @return List of token strings.
+        """
         return re.findall(r"\w+|[^\w\s]", text, re.UNICODE)
