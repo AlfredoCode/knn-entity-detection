@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Dict, Set, Tuple, List, Sequence, Optional
 from dataclasses import dataclass, field
+from collections import defaultdict
 
 Entity = Tuple[int, int, str] # (start, end, label)
 
@@ -80,7 +81,7 @@ def get_plain_text_cnec(entity_str: str) -> str:
                 i = j
                 if i < entity_len and entity_str[i] == " ":
                     i += 1
-                    continue
+                continue
         if entity_char == ">" and stack_depth > 0:
             stack_depth -= 1
             i += 1
@@ -248,3 +249,99 @@ class EvaluationResult:
             f"{self.partial_match.recall:>7.2%} {self.partial_match.f1:>7.2%}"
         )
         return "\n".join(lines)
+
+class Evaluator:
+
+    def __init__(self, label_map: Optional[Dict[str, str]] = None):
+        self._label_map = label_map or {}
+        self._per_type: Dict[str, EntityMetrics] = defaultdict(EntityMetrics)
+        self._exact = EntityMetrics()
+        self._partial = EntityMetrics()
+
+    def _map_label(self, label: str) -> str:
+        return self._label_map.get(label, label)
+
+    def _map_entities(self, entities: List[Entity]) -> List[Entity]:
+        return [(s, e, self._map_label(lbl)) for s, e, lbl in entities]
+
+    def add(self, gold: List[Entity], pred: List[Entity]) -> None:
+        gold = self._map_entities(gold)
+        pred = self._map_entities(pred)
+
+        gold_matched = [False] * len(gold)
+        pred_matched = [False] * len(pred)
+
+        # Exact matching
+        for pi, pe in enumerate(pred):
+            for gi, ge in enumerate(gold):
+                if not gold_matched[gi] and _exact_match(ge, pe):
+                    gold_matched[gi] = True
+                    pred_matched[pi] = True
+                    self._exact.tp += 1
+                    self._per_type[ge[2]].tp += 1
+                    break
+
+        for gi, matched in enumerate(gold_matched):
+            if not matched:
+                self._exact.fn += 1
+                self._per_type[gold[gi][2]].fn += 1
+
+        for pi, matched in enumerate(pred_matched):
+            if not matched:
+                self._exact.fp += 1
+                self._per_type[pred[pi][2]].fp += 1
+
+        # Partial matching
+        gold_partial = [False] * len(gold)
+        pred_partial = [False] * len(pred)
+
+        for pi, pe in enumerate(pred):
+            for gi, ge in enumerate(gold):
+                if not gold_partial[gi] and _partial_match(ge, pe):
+                    gold_partial[gi] = True
+                    pred_partial[pi] = True
+                    self._partial.tp += 1
+                    break
+
+        for gi, matched in enumerate(gold_partial):
+            if not matched:
+                self._partial.fn += 1
+
+        for pi, matched in enumerate(pred_partial):
+            if not matched:
+                self._partial.fp += 1
+
+    def result(self) -> EvaluationResult:
+        return EvaluationResult(per_type=dict(self._per_type), exact_match=self._exact, partial_match=self._partial)
+
+    def reset(self) -> None:
+        self._per_type.clear()
+        self._exact = EntityMetrics()
+        self._partial = EntityMetrics()
+
+def evaluate_cnec(gold_lines: Sequence[str], pred_lines: Sequence[str], label_map: Optional[Dict[str, str]] = None) -> EvaluationResult:
+    if len(gold_lines) != len(pred_lines):
+        raise ValueError(f"Line count mismatch: gold={len(gold_lines)}, pred={len(pred_lines)}")
+
+    evaluator = Evaluator(label_map=label_map)
+    for gold_line, pred_line in zip(gold_lines, pred_lines):
+        gold_ents = parse_cnec_entity(gold_line)
+        pred_ents = parse_cnec_entity(pred_line)
+        evaluator.add(gold_ents, pred_ents)
+
+    return evaluator.result()
+
+
+def evaluate_bioes(gold_tag_seqs: Sequence[Sequence[str]], pred_tag_seqs: Sequence[Sequence[str]], label_map: Optional[Dict[str, str]] = None) -> EvaluationResult:
+    if len(gold_tag_seqs) != len(pred_tag_seqs):
+        raise ValueError(f"Sequence count mismatch: gold={len(gold_tag_seqs)}, pred={len(pred_tag_seqs)}")
+
+    evaluator = Evaluator(label_map=label_map)
+    for gold_tags, pred_tags in zip(gold_tag_seqs, pred_tag_seqs):
+        if len(gold_tags) != len(pred_tags):
+            raise ValueError(f"Tag count mismatch in sentence: gold={len(gold_tags)}, pred={len(pred_tags)}")
+        gold_ents = parse_bioes_tags(gold_tags)
+        pred_ents = parse_bioes_tags(pred_tags)
+        evaluator.add(gold_ents, pred_ents)
+
+    return evaluator.result()
