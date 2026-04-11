@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Dict, Set, Tuple, List, Sequence, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 Entity = Tuple[int, int, str] # (start, end, label)
 
@@ -181,3 +181,70 @@ class EntityMetrics:
     @property
     def support(self) -> int:
         return self.tp + self.fn
+
+@dataclass
+class EvaluationResult:
+    per_type: Dict[str, EntityMetrics] = field(default_factory=dict)
+    exact_match: EntityMetrics = field(default_factory=EntityMetrics)
+    partial_match: EntityMetrics = field(default_factory=EntityMetrics)
+
+    @property
+    def macro_precision(self) -> float:
+        types_with_support = [m for m in self.per_type.values() if m.support > 0]
+        if not types_with_support:
+            return 0.0
+        return sum(m.precision for m in types_with_support) / len(types_with_support)
+
+    @property
+    def macro_recall(self) -> float:
+        types_with_support = [m for m in self.per_type.values() if m.support > 0]
+        if not types_with_support:
+            return 0.0
+        return sum(m.recall for m in types_with_support) / len(types_with_support)
+
+    @property
+    def macro_f1(self) -> float:
+        types_with_support = [m for m in self.per_type.values() if m.support > 0]
+        if not types_with_support:
+            return 0.0
+        return sum(m.f1 for m in types_with_support) / len(types_with_support)
+
+    @property
+    def micro_f1(self) -> float:
+        return self.exact_match.f1
+
+    @property
+    def micro_precision(self) -> float:
+        return self.exact_match.precision
+
+    @property
+    def micro_recall(self) -> float:
+        return self.exact_match.recall
+
+    def summary(self) -> str:
+        lines = []
+        lines.append(f"{'Type':<12} {'Prec':>7} {'Rec':>7} {'F1':>7} {'Support':>8}")
+        lines.append("-" * 44)
+
+        for label in sorted(self.per_type):
+            m = self.per_type[label]
+            if m.support > 0 or (m.tp + m.fp) > 0:
+                lines.append(
+                    f"{label:<12} {m.precision:>7.2%} {m.recall:>7.2%} "
+                    f"{m.f1:>7.2%} {m.support:>8d}"
+                )
+
+        lines.append("-" * 44)
+        lines.append(
+            f"{'micro':.<12} {self.micro_precision:>7.2%} {self.micro_recall:>7.2%} "
+            f"{self.micro_f1:>7.2%} {self.exact_match.support:>8d}"
+        )
+        lines.append(
+            f"{'macro':.<12} {self.macro_precision:>7.2%} {self.macro_recall:>7.2%} "
+            f"{self.macro_f1:>7.2%}"
+        )
+        lines.append(
+            f"{'partial':.<12} {self.partial_match.precision:>7.2%} "
+            f"{self.partial_match.recall:>7.2%} {self.partial_match.f1:>7.2%}"
+        )
+        return "\n".join(lines)
