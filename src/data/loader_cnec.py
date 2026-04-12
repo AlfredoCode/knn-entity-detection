@@ -1,5 +1,5 @@
 import re
-
+from bs4 import BeautifulSoup
 
 class LoaderCnec:
     """
@@ -46,64 +46,42 @@ class LoaderCnec:
         return sentences
 
     def _parse_line(self, line: str):
-        """
-        @brief Parses a single annotated line into tokens and BIOES labels.
+        line = f"<root>{line}</root>"
+        soup = BeautifulSoup(line, "html.parser")
 
-        Detects <ne type="X"> ... </ne> spans, tokenizes both entity and
-        non-entity text, and assigns BIOES labels accordingly.
-
-        @param line  A raw line from the dataset.
-        @return (tokens, labels) where:
-                - tokens: list of token strings
-                - labels: list of BIOES labels
-        """
         tokens = []
         labels = []
 
-        pattern = re.compile(r"<ne type=\"(.*?)\">(.*?)</ne>")
-        pos = 0
+        def walk(node):
+            if isinstance(node, str):
+                toks = self._tokenize(node)
+                tokens.extend(toks)
+                labels.extend(["O"] * len(toks))
+                return
 
-        for match in pattern.finditer(line):
-            start, end = match.span()
+            if node.name == "ne":
+                ent_type = node.get("type")
+                text = node.get_text()
 
-            # BEFORE ENTITY
-            before = line[pos:start]
-            before_tokens = self._tokenize(before)
+                ent_tokens = self._tokenize(text)
 
-            tokens.extend(before_tokens)
-            labels.extend(["O"] * len(before_tokens))
-
-            # ENTITY
-            ent_type = match.group(1)
-            ent_text = match.group(2)
-            ent_tokens = self._tokenize(ent_text)
-
-            if len(ent_tokens) == 1:
-                tokens.append(ent_tokens[0])
-                labels.append(f"S-{ent_type}")
+                if len(ent_tokens) == 1:
+                    tokens.append(ent_tokens[0])
+                    labels.append(f"S-{ent_type}")
+                else:
+                    for i, t in enumerate(ent_tokens):
+                        tokens.append(t)
+                        if i == 0:
+                            labels.append(f"B-{ent_type}")
+                        elif i == len(ent_tokens) - 1:
+                            labels.append(f"E-{ent_type}")
+                        else:
+                            labels.append(f"I-{ent_type}")
             else:
-                for i, t in enumerate(ent_tokens):
-                    tokens.append(t)
+                for child in node.children:
+                    walk(child)
 
-                    if i == 0:
-                        labels.append(f"B-{ent_type}")
-                    elif i == len(ent_tokens) - 1:
-                        labels.append(f"E-{ent_type}")
-                    else:
-                        labels.append(f"I-{ent_type}")
-
-            pos = end
-
-        # TAIL
-        tail = line[pos:]
-        tail_tokens = self._tokenize(tail)
-
-        tokens.extend(tail_tokens)
-        labels.extend(["O"] * len(tail_tokens))
-
-        # sanity check
-        assert len(tokens) == len(labels), f"ALIGN ERROR {len(tokens)} vs {len(labels)}"
-
+        walk(soup)
         return tokens, labels
 
     def _tokenize(self, text: str):
