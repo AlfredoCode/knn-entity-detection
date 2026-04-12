@@ -1,6 +1,7 @@
 import argparse
 from src.data.loader_cnec import LoaderCnec
 from src.data.mapper import Mapper
+import json
 
 def run(dataset_type: str, dpath: str):
     dataset_type = dataset_type.upper()
@@ -15,37 +16,47 @@ def run(dataset_type: str, dpath: str):
 
             print(f"Loaded sentences: {len(sentences)}")
 
-            out_path = "out_cnec.log"
-            broken = 0
-
             mapper = Mapper()
 
+            output = []
+
+            for idx, (tokens, labels) in enumerate(sentences):
+
+                if not tokens:
+                    continue
+
+                if len(tokens) != len(labels):
+                    continue
+
+                hf_tokens = []
+                hf_labels = []
+
+                for t, l in zip(tokens, labels):
+
+                    token = t.text if hasattr(t, "text") else t
+
+                    if l == "O":
+                        internal = "O"
+                    else:
+                        prefix, base = l.split("-", 1)
+                        internal = f"{prefix}-{mapper.CNEC_TO_INTERNAL.get(base, 'O')}"
+
+                    hf_tokens.append(token)
+                    hf_labels.append(internal)
+
+                output.append({
+                    "id": idx,
+                    "tokens": hf_tokens,
+                    "ner_tags": hf_labels
+                })
+
+            out_path = "out_cnec.json"
+
             with open(out_path, "w", encoding="utf-8") as f:
-                for tokens, labels in sentences:
+                json.dump(output, f, ensure_ascii=False, indent=2)
 
-                    if not tokens:
-                        continue
+            print(f"Dataset written to {out_path}")
 
-                    if len(tokens) != len(labels):
-                        continue
-
-                    flat = []
-
-                    for t, l in zip(tokens, labels):
-
-                        if l == "O":
-                            internal = "O"
-                        else:
-                            base = l.split("-", 1)[1]  # remove BIOES prefix
-                            internal = mapper.CNEC_TO_INTERNAL.get(base, "O")
-
-                        flat.append(t)
-                        flat.append(internal)
-
-                    f.write(" ".join(flat) + "\n")
-
-            print(f"BROKEN sentences skipped: {broken}")
-            print(f"BIOES dataset written to {out_path}")
         case "HISTORICAL":
             # TODO
             pass
