@@ -3,39 +3,19 @@ from bs4 import BeautifulSoup
 
 class LoaderCnec:
     """
-    @brief Loader for the CNEC XML-like annotated dataset.
-
-    This class reads a CNEC-formatted file where named entities are annotated
-    using <ne type="..."> ... </ne> tags. It converts each line into a sequence
-    of tokens and BIOES labels.
+    Loader for CNEC dataset using span-based BIOES tagging.
     """
 
     def __init__(self, path: str):
-        """
-        @brief Initializes the loader with a file path.
-
-        @param path  Path to the CNEC dataset file.
-        """
         self.path = path
 
     def load(self):
-        """
-        @brief Loads and parses the entire dataset file.
-
-        Reads the file line by line, skipping XML document tags, and converts
-        each annotated line into (tokens, labels) pairs.
-
-        @return List of tuples (tokens, labels), where:
-                - tokens: list of token strings
-                - labels: list of BIOES labels aligned with tokens
-        """
         sentences = []
 
         with open(self.path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
 
-                # skip XML header
                 if not line or line.startswith("<doc") or line.startswith("</doc"):
                     continue
 
@@ -45,54 +25,72 @@ class LoaderCnec:
 
         return sentences
 
+    # ---------------------------
+    # MAIN PARSER (SPAN-BASED)
+    # ---------------------------
     def _parse_line(self, line: str):
         line = f"<root>{line}</root>"
         soup = BeautifulSoup(line, "html.parser")
 
-        tokens = []
-        labels = []
+        # ---- step 1: rebuild clean text + collect entity spans
+        clean_text = ""
+        spans = []  # (start_char, end_char, type)
 
-        def walk(node):
+        def extract(node):
+            nonlocal clean_text
+
             if isinstance(node, str):
-                toks = self._tokenize(node)
-                tokens.extend(toks)
-                labels.extend(["O"] * len(toks))
+                clean_text += node
                 return
 
             if node.name == "ne":
                 ent_type = node.get("type")
-                text = node.get_text()
+                start = len(clean_text)
 
-                ent_tokens = self._tokenize(text)
-
-                if len(ent_tokens) == 1:
-                    tokens.append(ent_tokens[0])
-                    labels.append(f"S-{ent_type}")
-                else:
-                    for i, t in enumerate(ent_tokens):
-                        tokens.append(t)
-                        if i == 0:
-                            labels.append(f"B-{ent_type}")
-                        elif i == len(ent_tokens) - 1:
-                            labels.append(f"E-{ent_type}")
-                        else:
-                            labels.append(f"I-{ent_type}")
-            else:
                 for child in node.children:
-                    walk(child)
+                    extract(child)
 
-        walk(soup)
+                end = len(clean_text)
+                spans.append((start, end, ent_type))
+                return
+
+            for child in node.children:
+                extract(child)
+
+        extract(soup)
+
+        # ---- step 2: tokenize full sentence with offsets
+        tokens = []
+        token_spans = []
+
+        for m in re.finditer(r"\w+|[^\w\s]", clean_text, re.UNICODE):
+            tokens.append(m.group())
+            token_spans.append((m.start(), m.end()))
+
+        # ---- step 3: assign BIOES labels
+        labels = ["O"] * len(tokens)
+
+        def get_token_indices(start, end):
+            return [
+                i for i, (ts, te) in enumerate(token_spans)
+                if not (te <= start or ts >= end)
+            ]
+
+        for start, end, ent_type in spans:
+            idxs = get_token_indices(start, end)
+
+            if not idxs:
+                continue
+
+            if len(idxs) == 1:
+                labels[idxs[0]] = f"S-{ent_type}"
+            else:
+                labels[idxs[0]] = f"B-{ent_type}"
+                for i in idxs[1:-1]:
+                    labels[i] = f"I-{ent_type}"
+                labels[idxs[-1]] = f"E-{ent_type}"
+
+        # safety check
+        assert len(tokens) == len(labels), "Misalignment detected!"
+
         return tokens, labels
-
-    def _tokenize(self, text: str):
-        """
-        @brief Tokenizes text into words and punctuation.
-
-        Uses a regex that splits into:
-        - word characters (\\w+)
-        - single punctuation characters ([^\\w\\s])
-
-        @param text  Raw text fragment.
-        @return List of token strings.
-        """
-        return re.findall(r"\w+|[^\w\s]", text, re.UNICODE)
