@@ -39,7 +39,12 @@ def run(dataset_type: str, dpath: str):
                         internal = "O"
                     else:
                         prefix, base = l.split("-", 1)
-                        internal = f"{prefix}-{mapper.CNEC_TO_INTERNAL.get(base, 'O')}"
+
+                        mapped = mapper.CNEC_TO_INTERNAL.get(base)
+                        if mapped is None:
+                            internal = "O"
+                        else:
+                            internal = f"{prefix}-{mapped}"
 
                     hf_tokens.append(token)
                     hf_labels.append(internal)
