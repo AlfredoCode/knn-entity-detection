@@ -50,10 +50,11 @@ def run(dataset_type: str, dpath: str):
                     "ner_tags": hf_labels
                 })
 
-            out_path = "out_cnec.json"
+            out_path = "out_cnec.jsonl"
 
             with open(out_path, "w", encoding="utf-8") as f:
-                json.dump(output, f, ensure_ascii=False, indent=2)
+                for item in output:
+                    f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
             print(f"Dataset written to {out_path}")
 
