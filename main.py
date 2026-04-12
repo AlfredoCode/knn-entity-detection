@@ -1,5 +1,7 @@
 import argparse
+import json
 from src.data.loader_cnec import LoaderCnec
+from src.data.loader_historical import LoaderHistorical
 from src.data.mapper import Mapper
 
 def run(dataset_type: str, dpath: str):
@@ -47,8 +49,39 @@ def run(dataset_type: str, dpath: str):
             print(f"BROKEN sentences skipped: {broken}")
             print(f"BIOES dataset written to {out_path}")
         case "HISTORICAL":
-            # TODO
-            pass
+            print("Loading Historical NER dataset...")
+
+            loader = LoaderHistorical(dpath)
+            sentences = loader.load()
+
+            print(f"Loaded sentences: {len(sentences)}")
+
+            out_path = "out_historical.jsonl"
+
+            mapper = Mapper()
+
+            with open(out_path, "w", encoding="utf-8") as f:
+                for idx, (tokens, labels) in enumerate(sentences):
+
+                    if not tokens:
+                        continue
+
+                    if len(tokens) != len(labels):
+                        continue
+
+                    internal_labels = []
+                    for l in labels:
+                        if l == "O":
+                            internal_labels.append("O")
+                        else:
+                            prefix, base = l.split("-", 1)
+                            internal = mapper.LABEL_STUDIO_TO_INTERNAL.get(base, "O")
+                            internal_labels.append(f"{prefix}-{internal}" if internal != "O" else "O")
+
+                    record = {"id": idx, "tokens": tokens, "ner_tags": internal_labels}
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+            print(f"JSON Lines dataset written to {out_path}")
 
 
 def parse_args():
