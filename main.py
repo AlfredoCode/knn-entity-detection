@@ -3,6 +3,7 @@ import json
 from src.data.loader_cnec import LoaderCnec
 from src.data.loader_historical import LoaderHistorical
 from src.data.mapper import Mapper
+import json
 
 def run(dataset_type: str, dpath: str):
     dataset_type = dataset_type.upper()
@@ -17,37 +18,53 @@ def run(dataset_type: str, dpath: str):
 
             print(f"Loaded sentences: {len(sentences)}")
 
-            out_path = "out_cnec.log"
-            broken = 0
-
             mapper = Mapper()
 
-            with open(out_path, "w", encoding="utf-8") as f:
-                for tokens, labels in sentences:
+            output = []
 
-                    if not tokens:
-                        continue
+            for idx, (tokens, labels) in enumerate(sentences):
 
-                    if len(tokens) != len(labels):
-                        continue
+                if not tokens:
+                    continue
 
-                    flat = []
+                if len(tokens) != len(labels):
+                    continue
 
-                    for t, l in zip(tokens, labels):
+                hf_tokens = []
+                hf_labels = []
 
-                        if l == "O":
+                for t, l in zip(tokens, labels):
+
+                    token = t.text if hasattr(t, "text") else t
+
+                    if l == "O":
+                        internal = "O"
+                    else:
+                        prefix, base = l.split("-", 1)
+
+                        mapped = mapper.CNEC_TO_INTERNAL.get(base)
+                        if mapped is None:
                             internal = "O"
                         else:
-                            base = l.split("-", 1)[1]  # remove BIOES prefix
-                            internal = mapper.CNEC_TO_INTERNAL.get(base, "O")
+                            internal = f"{prefix}-{mapped}"
 
-                        flat.append(t)
-                        flat.append(internal)
+                    hf_tokens.append(token)
+                    hf_labels.append(internal)
 
-                    f.write(" ".join(flat) + "\n")
+                output.append({
+                    "id": idx,
+                    "tokens": hf_tokens,
+                    "ner_tags": hf_labels
+                })
 
-            print(f"BROKEN sentences skipped: {broken}")
-            print(f"BIOES dataset written to {out_path}")
+            out_path = "out_cnec.jsonl"
+
+            with open(out_path, "w", encoding="utf-8") as f:
+                for item in output:
+                    f.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+            print(f"Dataset written to {out_path}")
+
         case "HISTORICAL":
             print("Loading Historical NER dataset...")
 
