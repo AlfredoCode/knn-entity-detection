@@ -72,7 +72,7 @@ class LoaderHistorical:
         for r in results:
             if r.get('type') == 'choices':
                 choices = r.get('value', {}).get('choices', [])
-                if 'german' in choices or 'reject' in choices:
+                if 'czech' not in choices:
                     return None
 
         # Collect entity spans: (char_start, char_end, label)
