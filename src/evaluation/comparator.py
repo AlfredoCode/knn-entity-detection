@@ -1,7 +1,10 @@
 from __future__ import annotations
-from typing import List, Dict
+import json
+from typing import List, Dict, Optional
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from collections import defaultdict
+from itertools import combinations
 from src.evaluation.metrics import Entity, Evaluator
 
 @dataclass
@@ -12,8 +15,23 @@ class AnnotationRecord:
 
 @dataclass
 class IAAResult:
-    #TODO
-    pass
+    pairwise: List[PairwiseAgreement] = field(default_factory=list)
+
+    @property
+    def mean_f1(self) -> float:
+        if not self.pairwise:
+            return 0.0
+        return sum(x.entity_f1 for x in self.pairwise) / len(self.pairwise)
+
+    @property
+    def mean_kappa(self) -> float:
+        if not self.pairwise:
+            return 0.0
+        return sum(x.cohens_kappa for x in self.pairwise) / len(self.pairwise)
+
+    def summary(self) -> str:
+        #TODO
+        pass
 
 def _extract_entities_from_result(result: List[Dict[str, Any]]) -> List[Entity]:
     entities: List[Entity] = []
@@ -28,6 +46,24 @@ def _extract_entities_from_result(result: List[Dict[str, Any]]) -> List[Entity]:
             for label in labels:
                 entities.append((start, end, label))
     return entities
+
+def _cohens_kappa(tp: int, fp: int, fn: int, tn: int) -> float:
+    #TODO
+    pass
+
+@dataclass
+class PairwiseAgreement:
+    annotator_a: int
+    annotator_b: int
+    entity_f1: float
+    entity_precision: float
+    entity_recall: float
+    cohens_kappa: float
+    num_tasks: int
+
+def compute_pairwise_agreement(records_a: List[AnnotationRecord], records_b: List[AnnotationRecord], text_lengths: Optional[Dict[int, int]] = None) -> float:
+    #TODO
+    pass
 
 def parse_label_studio_json(path: str | Path) -> List[AnnotationRecord]:
     path = Path(path)
@@ -65,8 +101,19 @@ class Comparator:
         self._text_lengths[task_id] = length
 
     def _compute_iaa_for_records(self, records: List[AnnotationRecord]) -> IAAResult:
-        #TODO
-        pass
+        by_annotator: Dict[int, List[AnnotationRecord]] = defaultdict(list)
+        for record in records:
+            by_annotator[record.annotator_id].append(record)
+        
+        result = IAAResult()
+        for a_id, b_id in combinations(sorted(by_annotator), 2):
+            tasks_a = {x.task_id for x in by_annotator[a_id]}
+            tasks_b = {x.task_id for x in by_annotator[b_id]}
+            if not tasks_a.intersection(tasks_b):
+                continue
+            agreement = compute_pairwise_agreement(by_annotator[a_id], by_annotator[b_id], self._text_lengths)
+            if agreement.num_tasks > 0:
+                result.pairwise.append(agreement)
 
     def compute_iaa(self) -> IAAResult:
         return self._compute_iaa_for_records(self._records)
