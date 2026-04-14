@@ -1,6 +1,6 @@
 from __future__ import annotations
 import json
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional, Set, Tuple, Any
 from pathlib import Path
 from dataclasses import dataclass, field
 from collections import defaultdict
@@ -30,8 +30,12 @@ class IAAResult:
         return sum(x.cohens_kappa for x in self.pairwise) / len(self.pairwise)
 
     def summary(self) -> str:
-        #TODO
-        pass
+        lines = ["IAA Summary:"]
+        for pair in self.pairwise:
+            lines.append(f"Annotator {pair.annotator_a} vs {pair.annotator_b}: F1={pair.entity_f1:.4f}, Kappa={pair.cohens_kappa:.4f} (tasks={pair.num_tasks})")
+        lines.append(f"Mean Entity F1: {self.mean_f1:.4f}")
+        lines.append(f"Mean Cohen's Kappa: {self.mean_kappa:.4f}")
+        return "\n".join(lines)
 
 def _extract_entities_from_result(result: List[Dict[str, Any]]) -> List[Entity]:
     entities: List[Entity] = []
@@ -47,13 +51,40 @@ def _extract_entities_from_result(result: List[Dict[str, Any]]) -> List[Entity]:
                 entities.append((start, end, label))
     return entities
 
+def _spans_by_label(entities: List[Entity]) -> Dict[str, Set[int]]:
+    spans: Dict[str, Set[int]] = defaultdict(set)
+    for start, end, label in entities:
+        spans[label].update(range(start, end))
+    return spans
+
 def _cohens_kappa(tp: int, fp: int, fn: int, tn: int) -> float:
-    #TODO
-    pass
+    total = tp + fp + fn + tn
+    if total == 0:
+        return 0.0
+    p0 = (tp + tn) / total
+    pe = ((tp + fp) * (tp + fn) + (fn + tn) * (fp + tn)) / (total * total)
+    if abs(1.0 - pe) < 1e-10:
+        return 1.0 if abs(p0 - 1.0) < 1e-10 else 0.0
+    return (p0 - pe) / (1.0 - pe)
+    
 
 def _kappa_for_task(ents_a: List[Entity], ents_b: List[Entity], total_chars: int) -> Tuple[int, int, int, int]:
-    #TODO
-    pass
+    spans_a = _spans_by_label(ents_a)
+    spans_b = _spans_by_label(ents_b)
+    all_labels = set(spans_a) | set(spans_b)
+    if not all_labels:
+        return 0, 0, 0, 0
+
+    tp = fp = fn = 0
+    for label in all_labels:
+        span_a = spans_a.get(label, set())
+        span_b = spans_b.get(label, set())
+        tp += len(span_a & span_b)
+        fp += len(span_a - span_b)
+        fn += len(span_b - span_a)
+    
+    tn = total_chars * len(all_labels) - tp - fp - fn
+    return tp, fp, fn, tn
 
 @dataclass
 class PairwiseAgreement:
@@ -101,11 +132,10 @@ def compute_pairwise_agreement(records_a: List[AnnotationRecord], records_b: Lis
         total_fn += fn
         total_tn += tn
 
-        result_ab = eval_ab.result()
-        result_ba = eval_ba.result()
+    result_ab = eval_ab.result()
+    result_ba = eval_ba.result()
 
-        #TODO might need updates in case of micro/macro f1/prec/rec
-        return PairwiseAgreement(annotator_a=annotator_a, annotator_b=annotator_b, entity_f1=(result_ab.f1 + result_ba.f1) / 2, entity_precision=(result_ab.precision + result_ba.precision) / 2, entity_recall=(result_ab.recall + result_ba.recall) / 2, cohens_kappa=_cohens_kappa(total_tp, total_fp, total_fn, total_tn), num_tasks=len(common_tasks))
+    return PairwiseAgreement(annotator_a=annotator_a, annotator_b=annotator_b, entity_f1=(result_ab.micro_f1 + result_ba.micro_f1) / 2, entity_precision=(result_ab.micro_precision + result_ba.micro_precision) / 2, entity_recall=(result_ab.micro_recall + result_ba.micro_recall) / 2, cohens_kappa=_cohens_kappa(total_tp, total_fp, total_fn, total_tn), num_tasks=len(common_tasks))
 
 def parse_label_studio_json(path: str | Path) -> List[AnnotationRecord]:
     path = Path(path)
