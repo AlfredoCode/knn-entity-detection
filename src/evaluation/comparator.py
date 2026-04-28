@@ -9,12 +9,14 @@ from src.evaluation.metrics import Entity, Evaluator
 
 @dataclass
 class AnnotationRecord:
+    """Annotation for one task"""
     task_id: int
     annotator_id: int
-    entities: List[Entity]
+    entities: List[Entity] # List of (start, end, label)
 
 @dataclass
 class IAAResult:
+    """Aggregated IAA across all pairs of annotators"""
     pairwise: List[PairwiseAgreement] = field(default_factory=list)
 
     @property
@@ -38,6 +40,7 @@ class IAAResult:
         return "\n".join(lines)
 
 def _extract_entities_from_result(result: List[Dict[str, Any]]) -> List[Entity]:
+    """extracts NER spans from Label Studio format"""
     entities: List[Entity] = []
     for item in result:
         if item.get("type") != "labels":
@@ -52,12 +55,14 @@ def _extract_entities_from_result(result: List[Dict[str, Any]]) -> List[Entity]:
     return entities
 
 def _spans_by_label(entities: List[Entity]) -> Dict[str, Set[int]]:
+    """converts list of entities to dict of label"""
     spans: Dict[str, Set[int]] = defaultdict(set)
     for start, end, label in entities:
         spans[label].update(range(start, end))
     return spans
 
 def _cohens_kappa(tp: int, fp: int, fn: int, tn: int) -> float:
+    """computes Cohen's Kappa from 2x2 matrix"""
     total = tp + fp + fn + tn
     if total == 0:
         return 0.0
@@ -69,6 +74,7 @@ def _cohens_kappa(tp: int, fp: int, fn: int, tn: int) -> float:
     
 
 def _kappa_for_task(ents_a: List[Entity], ents_b: List[Entity], total_chars: int) -> Tuple[int, int, int, int]:
+    """computes TP, FP, FN, TN for one task"""
     spans_a = _spans_by_label(ents_a)
     spans_b = _spans_by_label(ents_b)
     all_labels = set(spans_a) | set(spans_b)
@@ -88,6 +94,7 @@ def _kappa_for_task(ents_a: List[Entity], ents_b: List[Entity], total_chars: int
 
 @dataclass
 class PairwiseAgreement:
+    """Agreement metrics"""
     annotator_a: int
     annotator_b: int
     entity_f1: float
@@ -97,6 +104,7 @@ class PairwiseAgreement:
     num_tasks: int
 
 def compute_pairwise_agreement(records_a: List[AnnotationRecord], records_b: List[AnnotationRecord], text_lengths: Optional[Dict[int, int]] = None) -> PairwiseAgreement:
+    """computes agreement between two sets of annotation records (different annotators, same task), returns PairwiseAgreement"""
     a_by_task: Dict[int, List[Entity]] = {}
     b_by_task: Dict[int, List[Entity]] = {}
     for rec in records_a:
@@ -138,6 +146,7 @@ def compute_pairwise_agreement(records_a: List[AnnotationRecord], records_b: Lis
     return PairwiseAgreement(annotator_a=annotator_a, annotator_b=annotator_b, entity_f1=(result_ab.micro_f1 + result_ba.micro_f1) / 2, entity_precision=(result_ab.micro_precision + result_ba.micro_precision) / 2, entity_recall=(result_ab.micro_recall + result_ba.micro_recall) / 2, cohens_kappa=_cohens_kappa(total_tp, total_fp, total_fn, total_tn), num_tasks=len(common_tasks))
 
 def parse_label_studio_json(path: str | Path) -> List[AnnotationRecord]:
+    """parses a Label Studio JSON export and returns a list of AnnotationRecords"""
     path = Path(path)
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -156,23 +165,35 @@ def parse_label_studio_json(path: str | Path) -> List[AnnotationRecord]:
     return records
 
 class Comparator:
+    """computes IAA from Label Studio exports
+    
+    Usage:
+        c = Comparator()
+        c.load_project("...json")
+        result = c.compute_iaa()
+        print(result.summary())
+    """
     
     def __init__(self) -> None:
         self._records: List[AnnotationRecord] = []
         self._text_lengths: Dict[int, int] = {}
 
     def load_project(self, path: str | Path) -> int:
+        """loads annotations, returns the number of loaded records"""
         records = parse_label_studio_json(path)
         self._records.extend(records)
         return len(records)
     
     def load_entities_direct(self, task_id: int, annotator_id: int, entities: List[Entity]) -> None:
+        """loads entities directly (testing, or non-Label-Studio data)"""
         self._records.append(AnnotationRecord(task_id=task_id, annotator_id=annotator_id, entities=entities))
 
     def set_text_length(self, task_id: int, length: int) -> None:
+        """improves kappa by setting length for a task"""
         self._text_lengths[task_id] = length
 
     def _compute_iaa_for_records(self, records: List[AnnotationRecord]) -> IAAResult:
+        """compute IAA across all annotators (pairs), returns IAAResult"""
         by_annotator: Dict[int, List[AnnotationRecord]] = defaultdict(list)
         for record in records:
             by_annotator[record.annotator_id].append(record)
@@ -192,13 +213,14 @@ class Comparator:
         return self._compute_iaa_for_records(self._records)
     
     def per_label_agreement(self) -> Dict[str, IAAResult]:
+        """computes IAA separately for each label, returns dict of label -> IAAResult for that label"""
         all_labels: Set[str] = set()
         for rec in self._records:
             for _, _, label in rec.entities:
                 all_labels.add(label)
 
-            results: Dict[str, IAAResult] = {}
-            for label in sorted(all_labels):
-                filtered = [AnnotationRecord(task_id=rec.task_id, annotator_id=rec.annotator_id, entities=[(s, e, l) for s, e, l in rec.entities if l == label]) for rec in self._records]
-                results[label] = self._compute_iaa_for_records(filtered)
+        results: Dict[str, IAAResult] = {}
+        for label in sorted(all_labels):
+            filtered = [AnnotationRecord(task_id=rec.task_id, annotator_id=rec.annotator_id, entities=[(s, e, l) for s, e, l in rec.entities if l == label]) for rec in self._records]
+            results[label] = self._compute_iaa_for_records(filtered)
         return results
