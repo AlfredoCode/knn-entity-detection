@@ -1,4 +1,3 @@
-from __future__ import annotations
 from typing import Dict, Set, Tuple, List, Sequence, Optional
 from dataclasses import dataclass, field
 from collections import defaultdict
@@ -345,3 +344,131 @@ def evaluate_bioes(gold_tag_seqs: Sequence[Sequence[str]], pred_tag_seqs: Sequen
         evaluator.add(gold_ents, pred_ents)
 
     return evaluator.result()
+
+@dataclass
+class TokenLevelMetrics:
+    """Per-class confusion + classification metrics at token granularity"""
+    # confusion[(true, pred)] = count
+    confusion: Dict[Tuple[str, str], int] = field(default_factory=dict)
+    # support[label] = number of gold tokens for label
+    support: Dict[str, int] = field(default_factory=dict)
+
+    @property
+    def labels(self) -> List[str]:
+        seen: Set[str] = set()
+        for t, p in self.confusion:
+            seen.add(t)
+            seen.add(p)
+        return sorted(seen)
+
+    @property
+    def total(self) -> int:
+        return sum(self.confusion.values())
+
+    @property
+    def correct(self) -> int:
+        return sum(c for (t, p), c in self.confusion.items() if t == p)
+
+    @property
+    def accuracy(self) -> float:
+        n = self.total
+        return (self.correct / n) if n else 0.0
+
+    def per_label(self, label: str) -> EntityMetrics:
+        m = EntityMetrics()
+        for (t, p), c in self.confusion.items():
+            if t == label and p == label:
+                m.tp += c
+            elif t != label and p == label:
+                m.fp += c
+            elif t == label and p != label:
+                m.fn += c
+        return m
+
+    @property
+    def macro_f1(self) -> float:
+        labels = [l for l in self.labels if l != "O" and self.support.get(l, 0) > 0]
+        if not labels:
+            return 0.0
+        return sum(self.per_label(l).f1 for l in labels) / len(labels)
+
+    @property
+    def micro_f1(self) -> float:
+        # Micro across non-O labels.
+        tp = fp = fn = 0
+        for (t, p), c in self.confusion.items():
+            if t == "O" and p == "O":
+                continue
+            if t == p:
+                tp += c
+            elif t == "O":
+                fp += c
+            elif p == "O":
+                fn += c
+            else:
+                # Wrong class: counts as both FP for predicted and FN for true
+                fp += c
+                fn += c
+        denom_p = tp + fp
+        denom_r = tp + fn
+        prec = tp / denom_p if denom_p else 0.0
+        rec = tp / denom_r if denom_r else 0.0
+        return (2 * prec * rec / (prec + rec)) if (prec + rec) else 0.0
+
+    def summary(self) -> str:
+        lines = [f"{'Label':<20} {'Prec':>7} {'Rec':>7} {'F1':>7} {'Support':>8}"]
+        lines.append("-" * 52)
+        for lbl in self.labels:
+            if lbl == "O":
+                continue
+            m = self.per_label(lbl)
+            if m.support == 0 and (m.tp + m.fp) == 0:
+                continue
+            lines.append(
+                f"{lbl:<20} {m.precision:>7.2%} {m.recall:>7.2%} "
+                f"{m.f1:>7.2%} {m.support:>8d}"
+            )
+        lines.append("-" * 52)
+        lines.append(f"{'accuracy':<20} {self.accuracy:>7.2%}")
+        lines.append(f"{'micro F1':<20} {self.micro_f1:>7.2%}")
+        lines.append(f"{'macro F1':<20} {self.macro_f1:>7.2%}")
+        return "\n".join(lines)
+
+
+def _strip_bio_prefix(tag: str) -> str:
+    """Return the class portion of a BIO/BIOES tag, or 'O'"""
+    if not tag or tag == "O":
+        return "O"
+    if "-" in tag:
+        _, core = tag.split("-", 1)
+        return core or "O"
+    return tag
+
+
+class TokenLevelEvaluator:
+    """Token-level evaluator over BIO/BIOES tag sequences"""
+
+    def __init__(self, label_map: Optional[Dict[str, str]] = None) -> None:
+        self._label_map = label_map or {}
+        self._confusion: Dict[Tuple[str, str], int] = defaultdict(int)
+        self._support: Dict[str, int] = defaultdict(int)
+
+    def _resolve(self, tag: str) -> str:
+        core = _strip_bio_prefix(tag)
+        return self._label_map.get(core, core)
+
+    def add(self, gold_tags: Sequence[str], pred_tags: Sequence[str]) -> None:
+        if len(gold_tags) != len(pred_tags):
+            raise ValueError(f"Tag count mismatch: gold={len(gold_tags)}, pred={len(pred_tags)}")
+        for g, p in zip(gold_tags, pred_tags):
+            gc = self._resolve(g)
+            pc = self._resolve(p)
+            self._confusion[(gc, pc)] += 1
+            self._support[gc] += 1
+
+    def result(self) -> TokenLevelMetrics:
+        return TokenLevelMetrics(confusion=dict(self._confusion), support=dict(self._support))
+
+    def reset(self) -> None:
+        self._confusion.clear()
+        self._support.clear()
