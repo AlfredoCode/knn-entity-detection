@@ -243,3 +243,60 @@ def analyze(
         length_buckets=length_buckets,
         oov_correlation=oov_corr,
     )
+
+
+def _load_jsonl(path: str | Path) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                out.append(json.loads(line))
+    return out
+
+
+def _build_argparser():
+    import argparse
+    p = argparse.ArgumentParser(
+        description="Error analysis on stored predictions.",
+    )
+    p.add_argument("--gold", required=True,
+                   help="JSONL with {tokens, ner_tags}.")
+    p.add_argument("--pred", required=True,
+                   help="JSONL with {pred_tags} aligned to gold by line order.")
+    p.add_argument("--train", default=None,
+                   help="Optional training JSONL for vocab-based OOV stats.")
+    p.add_argument("--gold-label-space", default="internal",
+                   choices=["internal", "cnec", "label_studio"])
+    p.add_argument("--top-worst", type=int, default=20)
+    p.add_argument("--top-confusions", type=int, default=10)
+    p.add_argument("--out", required=True)
+    p.add_argument("--text-out", default=None)
+    return p
+
+
+def main(argv=None) -> int:
+    args = _build_argparser().parse_args(argv)
+    gold = _load_jsonl(args.gold)
+    preds = [r["pred_tags"] for r in _load_jsonl(args.pred)]
+    train_vocab = None
+    if args.train:
+        train_vocab = {t for ex in _load_jsonl(args.train) for t in ex["tokens"]}
+    rep = analyze(
+        gold, preds,
+        gold_label_space=args.gold_label_space,
+        top_n_worst=args.top_worst,
+        top_k_confusions=args.top_confusions,
+        train_vocab=train_vocab,
+    )
+    out = rep.write(args.out)
+    print(f"wrote {out}")
+    summary = rep.text_summary()
+    print(summary)
+    if args.text_out:
+        Path(args.text_out).write_text(summary, encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    main()
