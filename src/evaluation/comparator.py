@@ -1,18 +1,23 @@
 from __future__ import annotations
 import json
-from typing import List, Dict, Optional, Set, Tuple, Any
-from pathlib import Path
+import re
+from typing import List, Dict, Optional, Set, Tuple, Any, Hashable
+from urllib.parse import unquote, urlparse, parse_qs
+from pathlib import Path, PurePosixPath
 from dataclasses import dataclass, field
 from collections import defaultdict
 from itertools import combinations
 from src.evaluation.metrics import Entity, Evaluator
 
+SourceId = Hashable
+
 @dataclass
 class AnnotationRecord:
     """Annotation for one task"""
-    task_id: int
+    source_id: SourceId
     annotator_id: int
     entities: List[Entity] # List of (start, end, label)
+    task_id: Optional[int] = None
 
 @dataclass
 class IAAResult:
@@ -54,6 +59,19 @@ def _extract_entities_from_result(result: List[Dict[str, Any]]) -> List[Entity]:
                 entities.append((start, end, label))
     return entities
 
+def source_id_from_url(url: str) -> str:
+    """Derive a source_id from Label Studio data URL"""
+    if not url:
+        return ""
+    decoded = unquote(url)
+    parsed = urlparse(decoded)
+    qs = parse_qs(parsed.query)
+    if "d" in qs and qs["d"]:
+        path = qs["d"][0]
+    else:
+        path = parsed.path or decoded
+    return PurePosixPath(path).name or decoded
+
 def _spans_by_label(entities: List[Entity]) -> Dict[str, Set[int]]:
     """converts list of entities to dict of label"""
     spans: Dict[str, Set[int]] = defaultdict(set)
@@ -90,6 +108,8 @@ def _kappa_for_task(ents_a: List[Entity], ents_b: List[Entity], total_chars: int
         fn += len(span_b - span_a)
     
     tn = total_chars * len(all_labels) - tp - fp - fn
+    if tn < 0:
+        tn = 0
     return tp, fp, fn, tn
 
 @dataclass
@@ -105,32 +125,36 @@ class PairwiseAgreement:
 
 def compute_pairwise_agreement(records_a: List[AnnotationRecord], records_b: List[AnnotationRecord], text_lengths: Optional[Dict[int, int]] = None) -> PairwiseAgreement:
     """computes agreement between two sets of annotation records (different annotators, same task), returns PairwiseAgreement"""
-    a_by_task: Dict[int, List[Entity]] = {}
-    b_by_task: Dict[int, List[Entity]] = {}
+    a_by_src: Dict[SourceId, List[Entity]] = {}
+    b_by_src: Dict[SourceId, List[Entity]] = {}
     for rec in records_a:
-        a_by_task.setdefault(rec.task_id, []).extend(rec.entities)
+        a_by_src.setdefault(rec.source_id, []).extend(rec.entities)
     for rec in records_b:
-        b_by_task.setdefault(rec.task_id, []).extend(rec.entities)
+        b_by_src.setdefault(rec.source_id, []).extend(rec.entities)
 
-    common_tasks = set(a_by_task) & set(b_by_task)
+    common = set(a_by_src) & set(b_by_src)
     annotator_a = records_a[0].annotator_id if records_a else -1
     annotator_b = records_b[0].annotator_id if records_b else -1
-    
-    if not common_tasks:
-        return PairwiseAgreement(annotator_a=annotator_a, annotator_b=annotator_b, entity_f1=0.0, entity_precision=0.0, entity_recall=0.0, cohens_kappa=0.0, num_tasks=0)
+
+    if not common:
+        return PairwiseAgreement(
+            annotator_a=annotator_a, annotator_b=annotator_b,
+            entity_f1=0.0, entity_precision=0.0, entity_recall=0.0,
+            cohens_kappa=0.0, num_tasks=0,
+        )
 
     eval_ab = Evaluator()
     eval_ba = Evaluator()
     total_tp = total_fp = total_fn = total_tn = 0
 
-    for task_id in common_tasks:
-        ents_a = a_by_task[task_id]
-        ents_b = b_by_task[task_id]
+    for sid in common:
+        ents_a = a_by_src[sid]
+        ents_b = b_by_src[sid]
         eval_ab.add(ents_a, ents_b)
         eval_ba.add(ents_b, ents_a)
-    
-        if text_lengths and task_id in text_lengths:
-            total_chars = text_lengths[task_id]
+
+        if text_lengths and sid in text_lengths:
+            total_chars = text_lengths[sid]
         else:
             total_chars = max((e[1] for e in ents_a + ents_b), default=0)
 
@@ -140,10 +164,18 @@ def compute_pairwise_agreement(records_a: List[AnnotationRecord], records_b: Lis
         total_fn += fn
         total_tn += tn
 
-    result_ab = eval_ab.result()
-    result_ba = eval_ba.result()
+    res_ab = eval_ab.result()
+    res_ba = eval_ba.result()
 
-    return PairwiseAgreement(annotator_a=annotator_a, annotator_b=annotator_b, entity_f1=(result_ab.micro_f1 + result_ba.micro_f1) / 2, entity_precision=(result_ab.micro_precision + result_ba.micro_precision) / 2, entity_recall=(result_ab.micro_recall + result_ba.micro_recall) / 2, cohens_kappa=_cohens_kappa(total_tp, total_fp, total_fn, total_tn), num_tasks=len(common_tasks))
+    return PairwiseAgreement(
+        annotator_a=annotator_a,
+        annotator_b=annotator_b,
+        entity_f1=(res_ab.micro_f1 + res_ba.micro_f1) / 2,
+        entity_precision=(res_ab.micro_precision + res_ba.micro_precision) / 2,
+        entity_recall=(res_ab.micro_recall + res_ba.micro_recall) / 2,
+        cohens_kappa=_cohens_kappa(total_tp, total_fp, total_fn, total_tn),
+        num_tasks=len(common)
+    )
 
 def parse_label_studio_json(path: str | Path) -> List[AnnotationRecord]:
     """parses a Label Studio JSON export and returns a list of AnnotationRecords"""
@@ -153,7 +185,11 @@ def parse_label_studio_json(path: str | Path) -> List[AnnotationRecord]:
     
     records: List[AnnotationRecord] = []
     for task in data:
-        task_id = task["id"]
+        task_id = task.get("id")
+        url = (task.get("data") or {}).get("text") or ""
+        sid = source_id_from_url(url) if url else None
+        if not sid:
+            sid = f"task:{task_id}"
         for ann in task.get("annotations", []):
             if ann.get("was_cancelled", False):
                 continue
@@ -161,7 +197,12 @@ def parse_label_studio_json(path: str | Path) -> List[AnnotationRecord]:
             if annotator_id is None:
                 continue
             entities = _extract_entities_from_result(ann.get("result", []))
-            records.append(AnnotationRecord(task_id=task_id, annotator_id=annotator_id, entities=entities))
+            records.append(AnnotationRecord(
+                source_id=sid,
+                annotator_id=annotator_id,
+                entities=entities,
+                task_id=task_id
+            ))
     return records
 
 class Comparator:
@@ -170,6 +211,7 @@ class Comparator:
     Usage:
         c = Comparator()
         c.load_project("...json")
+        c.load_project("2...json")
         result = c.compute_iaa()
         print(result.summary())
     """
@@ -184,9 +226,11 @@ class Comparator:
         self._records.extend(records)
         return len(records)
     
-    def load_entities_direct(self, task_id: int, annotator_id: int, entities: List[Entity]) -> None:
+    def load_entities_direct(self, source_id: SourceId, annotator_id: int, entities: List[Entity], task_id: Optional[int] = None) -> None:
         """loads entities directly (testing, or non-Label-Studio data)"""
-        self._records.append(AnnotationRecord(task_id=task_id, annotator_id=annotator_id, entities=entities))
+        self._records.append(AnnotationRecord(source_id=source_id, annotator_id=annotator_id,
+            entities=entities,
+            task_id=task_id))
 
     def set_text_length(self, task_id: int, length: int) -> None:
         """improves kappa by setting length for a task"""
@@ -200,11 +244,13 @@ class Comparator:
         
         result = IAAResult()
         for a_id, b_id in combinations(sorted(by_annotator), 2):
-            tasks_a = {x.task_id for x in by_annotator[a_id]}
-            tasks_b = {x.task_id for x in by_annotator[b_id]}
-            if not tasks_a.intersection(tasks_b):
+            srcs_a = {x.source_id for x in by_annotator[a_id]}
+            srcs_b = {x.source_id for x in by_annotator[b_id]}
+            if not srcs_a.intersection(srcs_b):
                 continue
-            agreement = compute_pairwise_agreement(by_annotator[a_id], by_annotator[b_id], self._text_lengths)
+            agreement = compute_pairwise_agreement(
+                by_annotator[a_id], by_annotator[b_id], self._text_lengths,
+            )
             if agreement.num_tasks > 0:
                 result.pairwise.append(agreement)
         return result
@@ -221,6 +267,11 @@ class Comparator:
 
         results: Dict[str, IAAResult] = {}
         for label in sorted(all_labels):
-            filtered = [AnnotationRecord(task_id=rec.task_id, annotator_id=rec.annotator_id, entities=[(s, e, l) for s, e, l in rec.entities if l == label]) for rec in self._records]
+            filtered = [AnnotationRecord(
+                    source_id=rec.source_id,
+                    annotator_id=rec.annotator_id,
+                    entities=[(s, e, l) for s, e, l in rec.entities if l == label],
+                    task_id=rec.task_id)
+                for rec in self._records]
             results[label] = self._compute_iaa_for_records(filtered)
         return results
