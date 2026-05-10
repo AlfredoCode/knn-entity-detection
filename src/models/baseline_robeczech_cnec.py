@@ -5,7 +5,9 @@ from transformers import AutoTokenizer, AutoModelForTokenClassification
 from sklearn.metrics import classification_report, confusion_matrix
 from seqeval.metrics import classification_report as seqeval_report
 from seqeval.metrics import f1_score as seqeval_f1
-from src.data.mapper import Mapper
+
+from src.data.mapper import Mapper, LabelNormalizer
+from src.evaluation.metrics import Evaluator, parse_bioes_tags
 
 
 # -----------------------------
@@ -29,7 +31,7 @@ def normalize_pred(tag):
     else:
         core = tag
     core = core.lower()
-    return Mapper().CNEC_TO_INTERNAL.get(core, "O")
+    return Mapper.CNEC_TO_INTERNAL.get(core, "O")
 
 
 # -----------------------------
@@ -128,6 +130,12 @@ def main():
     gold_bio_all = []
     pred_bio_all = []
 
+    # -----------------------------
+    # Evaluator + Normalizer
+    # -----------------------------
+    evaluator = Evaluator()
+    normalizer = LabelNormalizer.cnec()
+
     print("\n=== TOKEN‑LEVEL COMPARISON ===\n")
 
     # -----------------------------
@@ -143,7 +151,7 @@ def main():
             tokens = item["tokens"]
             gold = item["ner_tags"]
 
-            print(f"Sentence ID {item['id']}")
+            print(f"Sentence ID {item.get('id', 'N/A')}")
 
             gold_norm_seq = []
             pred_norm_seq = []
@@ -169,6 +177,16 @@ def main():
             gold_bio_all.append(gold_norm_seq)
             pred_bio_all.append(to_bio(pred_norm_seq))
 
+            # -----------------------------
+            # ENTITY‑LEVEL EVALUATOR
+            # -----------------------------
+            gold_ents = parse_bioes_tags(gold)
+
+            pred_internal_bioes = normalizer.normalize_bio(pred)
+            pred_ents = parse_bioes_tags(pred_internal_bioes)
+
+            evaluator.add(gold_ents, pred_ents)
+
     print(f"Accuracy: {correct}/{total} = {correct/total:.4f}")
 
     # -----------------------------
@@ -191,6 +209,14 @@ def main():
     print("\n=== SPAN‑LEVEL METRICS (seqeval) ===\n")
     print(seqeval_report(gold_bio_all, pred_bio_all, digits=4))
     print("Span‑level F1:", seqeval_f1(gold_bio_all, pred_bio_all))
+
+    # -----------------------------
+    # Evaluator summary
+    # -----------------------------
+    print("\n=== ENTITY‑LEVEL METRICS (Evaluator) ===\n")
+    result = evaluator.result()
+    print(result.summary())
+    print("\nMicro F1:", result.micro_f1)
 
 
 if __name__ == "__main__":
