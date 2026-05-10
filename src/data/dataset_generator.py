@@ -67,7 +67,6 @@ class DatasetGenerator:
         hist_val  = eval_pool[:n_val_target]
         hist_test = eval_pool[n_val_target:]
 
-        # Print summaries & Save
         print(f"\nCNEC split:")
         print(f"  train: {len(cnec_train):>6} sentences")
         print(f"  val:   {len(cnec_dtest):>6} sentences")
