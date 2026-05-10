@@ -52,20 +52,24 @@ class DatasetGenerator:
         hist_val   = historical_data[n_train:n_train + n_val]
         hist_test  = historical_data[n_train + n_val:]
 
-        train_data = cnec_train + hist_train
-        val_data   = cnec_dtest + hist_val
-        test_data  = cnec_etest + hist_test
+        print(f"\nCNEC split:")
+        print(f"  train: {len(cnec_train):>6} sentences")
+        print(f"  val:   {len(cnec_dtest):>6} sentences")
+        print(f"  test:  {len(cnec_etest):>6} sentences")
 
-        print(f"\nFinal split ({train_ratio:.0%}/{val_ratio:.0%}/{test_ratio:.0%}):")
-        print(f"  train: {len(train_data):>6} sentences  (CNEC {len(cnec_train)} + hist {len(hist_train)})")
-        print(f"  val:   {len(val_data):>6} sentences  (CNEC {len(cnec_dtest)} + hist {len(hist_val)})")
-        print(f"  test:  {len(test_data):>6} sentences  (CNEC {len(cnec_etest)} + hist {len(hist_test)})")
-        print(f"  total: {len(train_data) + len(val_data) + len(test_data):>6} sentences")
+        print(f"\nHistorical split ({train_ratio:.0%}/{val_ratio:.0%}/{test_ratio:.0%}):")
+        print(f"  train: {len(hist_train):>6} sentences")
+        print(f"  val:   {len(hist_val):>6} sentences")
+        print(f"  test:  {len(hist_test):>6} sentences")
 
         os.makedirs(output_dir, exist_ok=True)
-        self._save_jsonl(train_data, f"{output_dir}/train.jsonl")
-        self._save_jsonl(val_data,   f"{output_dir}/val.jsonl")
-        self._save_jsonl(test_data,  f"{output_dir}/test.jsonl")
+        self._save_jsonl(cnec_train, f"{output_dir}/cnec_train.jsonl")
+        self._save_jsonl(cnec_dtest, f"{output_dir}/cnec_val.jsonl")
+        self._save_jsonl(cnec_etest, f"{output_dir}/cnec_test.jsonl")
+        self._save_jsonl(hist_train, f"{output_dir}/historical_train.jsonl")
+        self._save_jsonl(hist_val,   f"{output_dir}/historical_val.jsonl")
+        self._save_jsonl(hist_test,  f"{output_dir}/historical_test.jsonl")
+        print(f"\nSaved to {output_dir}")
 
     def _map_cnec(self, sentences, mapper):
         records = []
