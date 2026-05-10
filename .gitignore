@@ -3,3 +3,4 @@ resources/HistoricalNERData
 ner_model/
 *.log
 *.pyc
+*.jsonl

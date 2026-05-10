@@ -68,7 +68,20 @@ class Mapper:
     }
 
     LABEL_STUDIO_TO_INTERNAL = {
-        # TODO
+        "per":    "PersonalName",
+        "loc_c":  "Location_ManMade",
+        "loc_n":  "Location_Natural",
+        "loc_s":  "Location_Structure",
+        "ins":    "Institution",
+        "tim":    "Time",
+        "med":    "Media",
+        "obj_a":  "Object",
+        "obj_p":  "Object",
+        "groups": "O",
+        "evt":    "O",
+        "ide":    "O",
+        "misc":   "O",
+        "amb":    "O",
     }
 
 
