@@ -31,34 +31,50 @@ class DatasetGenerator:
         print(f"CNEC etest:  {len(cnec_etest):>6} sentences")
         print(f"CNEC total:  {len(cnec_train) + len(cnec_dtest) + len(cnec_etest):>6} sentences")
 
-        # Load all HistoricalNER data
-        historical_data = []
-        for project in self.historical_projects:
-            loaded = self._map_historical(LoaderHistorical(project).load(), mapper)
-            print(f"Historical {os.path.basename(project)}: {len(loaded):>6} sentences")
-            historical_data.extend(loaded)
-
-        print(f"Historical total: {len(historical_data):>6} sentences")
-
-        # Shuffle and split historical data proportionally
-        rng = random.Random(seed)
-        rng.shuffle(historical_data)
-
-        n = len(historical_data)
-        n_train = round(n * train_ratio)
-        n_val   = round(n * val_ratio)
+        # Load HistoricalNER data
+        print("\nLoading Historical data...")
+        hist_loader = LoaderHistorical(self.historical_projects)
         
-        hist_train = historical_data[:n_train]
-        hist_val   = historical_data[n_train:n_train + n_val]
-        hist_test  = historical_data[n_train + n_val:]
+        # Single-annotator data (safe for training)
+        raw_single = hist_loader.load()
+        hist_single = self._map_historical(raw_single, mapper)
+        
+        # Multi-annotator data
+        raw_multi = hist_loader.load_gold_standard()
+        hist_multi = self._map_historical(raw_multi, mapper)
 
+        print(f"Historical (Single annotator): {len(hist_single):>6} sentences")
+        print(f"Historical (Multi annotator):  {len(hist_multi):>6} sentences")
+
+
+        # Shuffle and split historical data
+        rng = random.Random(seed)
+        rng.shuffle(hist_single)
+        rng.shuffle(hist_multi)
+
+        total_hist = len(hist_single) + len(hist_multi)
+        n_train_target = round(total_hist * train_ratio)
+        n_val_target   = round(total_hist * val_ratio)
+        
+        # The training set is populated with single-annotator data
+        n_train = min(n_train_target, len(hist_single))
+        hist_train = hist_single[:n_train]
+
+        # The evaluation pool consists of ALL multi-annotator data plus any leftover single-annotator data
+        eval_pool = hist_single[n_train:] + hist_multi
+        rng.shuffle(eval_pool) # Shuffle thoroughly so validation and test sets get a mix of both groups
+
+        hist_val  = eval_pool[:n_val_target]
+        hist_test = eval_pool[n_val_target:]
+
+        # Print summaries & Save
         print(f"\nCNEC split:")
         print(f"  train: {len(cnec_train):>6} sentences")
         print(f"  val:   {len(cnec_dtest):>6} sentences")
         print(f"  test:  {len(cnec_etest):>6} sentences")
 
         print(f"\nHistorical split ({train_ratio:.0%}/{val_ratio:.0%}/{test_ratio:.0%}):")
-        print(f"  train: {len(hist_train):>6} sentences")
+        print(f"  train: {len(hist_train):>6} sentences (100% single-annotated)")
         print(f"  val:   {len(hist_val):>6} sentences")
         print(f"  test:  {len(hist_test):>6} sentences")
 
