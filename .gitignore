@@ -1,2 +1,6 @@
 resources/cnec2.0
 resources/HistoricalNERData
+ner_model/
+*.log
+*.pyc
+*.jsonl
