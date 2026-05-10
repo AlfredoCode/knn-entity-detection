@@ -191,7 +191,7 @@ def main():
     print("\n=== SPAN‑LEVEL METRICS (seqeval) ===\n")
     print(seqeval_report(gold_bio_all, pred_bio_all, digits=4))
     print("Span‑level F1:", seqeval_f1(gold_bio_all, pred_bio_all))
-
+    
 
 if __name__ == "__main__":
     main()
