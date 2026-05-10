@@ -29,7 +29,7 @@ MAX_LENGTH = 512
 BATCH_SIZE = 8
 LEARNING_RATE = 2e-5
 WEIGHT_DECAY = 0.01
-NUM_EPOCHS = 2
+NUM_EPOCHS = 8
 
 
 # =========================================================
