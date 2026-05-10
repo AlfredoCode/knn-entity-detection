@@ -5,8 +5,8 @@ from transformers import AutoTokenizer, AutoModelForTokenClassification
 from src.evaluation.metrics import Evaluator, parse_bioes_tags
 
 
-MODEL_PATH = "src/models/best_model"  # or best checkpoint folder
-VALID_PATH = "out_datasets/val.jsonl"
+MODEL_PATH = "best_model_robe_base"  # or best checkpoint folder
+VALID_PATH = "out_datasets/cnec_test.jsonl"
 
 
 # ----------------------------
