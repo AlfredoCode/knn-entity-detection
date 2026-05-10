@@ -4,9 +4,11 @@ from gliner import GLiNER
 from sklearn.metrics import classification_report, confusion_matrix
 from seqeval.metrics import classification_report as seqeval_report
 from seqeval.metrics import f1_score as seqeval_f1
-from src.data.mapper import Mapper
+from src.data.mapper import Mapper, LabelNormalizer
+from src.evaluation.metrics import Evaluator, parse_bioes_tags
 import logging
 logging.getLogger("stanza").setLevel(logging.ERROR)
+
 
 # -----------------------------
 # Label normalization
@@ -29,7 +31,7 @@ def normalize_pred(tag):
     else:
         core = tag
     core = core.lower()
-    return Mapper().CNEC_TO_INTERNAL.get(core, "O")
+    return Mapper.CNEC_TO_INTERNAL.get(core, "O")
 
 
 # -----------------------------
@@ -62,7 +64,7 @@ def load_dataset(path):
 def spans_to_token_labels(tokens, spans, text):
     pred_labels = ["O"] * len(tokens)
 
-    # compute token offsets in *this* text
+    # compute token offsets
     char_offsets = []
     pos = 0
     for tok in tokens:
@@ -80,7 +82,7 @@ def spans_to_token_labels(tokens, spans, text):
         if s is None or e is None:
             continue
 
-        label = span["label"]  # use raw GLiNER label here
+        label = span["label"]
 
         for i, (ts, te) in enumerate(char_offsets):
             if ts is None:
@@ -97,12 +99,12 @@ def spans_to_token_labels(tokens, spans, text):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", required=True)
-    parser.add_argument("--batch_size", type=int, default=1)  # GLiNER is not batched
     args = parser.parse_args()
 
     print("Loading GLiNER model...")
     model = GLiNER.from_pretrained("knowledgator/gliner-x-large")
     model.to("cuda")
+
     labels = [
         "PersonalName",
         "Location_General",
@@ -127,48 +129,61 @@ def main():
     gold_bio_all = []
     pred_bio_all = []
 
+    # -----------------------------
+    # Evaluator + Normalizer
+    # -----------------------------
+    evaluator = Evaluator()
+    normalizer = LabelNormalizer.internal()   # GLiNER already outputs INTERNAL labels
+
     print("\n=== TOKEN‑LEVEL COMPARISON (GLiNER) ===\n")
 
     # -----------------------------
-    # Loop (pseudo-batching for consistency)
+    # Loop
     # -----------------------------
-    for i in range(0, len(data), args.batch_size):
-        batch = data[i : i + args.batch_size]
+    for item in data:
+        tokens = item["tokens"]
+        gold = item["ner_tags"]
 
-        for item in batch:
-            tokens = item["tokens"]
-            gold = item["ner_tags"]
+        text = " ".join(tokens)
+        spans = model.predict_entities(text, labels, threshold=0.5)
+        pred = spans_to_token_labels(tokens, spans, text)
 
-            text = " ".join(tokens)
-            spans = model.predict_entities(text, labels, threshold=0.5)
-            pred = spans_to_token_labels(tokens, spans, text)
+        print(f"Sentence ID {item['id']}")
 
+        gold_norm_seq = []
+        pred_norm_seq = []
 
-            print(f"Sentence ID {item['id']}")
+        for t, g, p in zip(tokens, gold, pred):
+            g_norm = normalize_gold(g)
+            p_norm = normalize_gold(p)
 
-            gold_norm_seq = []
-            pred_norm_seq = []
+            ok = "✓" if g_norm == p_norm else "✗"
+            print(f"{t:20} gold={g:20}({g_norm:20}) pred={p:20}({p_norm:20}) {ok}")
 
-            for t, g, p in zip(tokens, gold, pred):
-                g_norm = normalize_gold(g)
-                p_norm = normalize_gold(p)
+            total += 1
+            correct += (g_norm == p_norm)
 
-                ok = "✓" if g_norm == p_norm else "✗"
-                print(f"{t:20} gold={g:20}({g_norm:20}) pred={p:20}({p_norm:20}) {ok}")
+            all_gold.append(g_norm)
+            all_pred.append(p_norm)
 
-                total += 1
-                correct += (g_norm == p_norm)
+            gold_norm_seq.append(g)
+            pred_norm_seq.append(p_norm)
 
-                all_gold.append(g_norm)
-                all_pred.append(p_norm)
+        print()
 
-                gold_norm_seq.append(g)
-                pred_norm_seq.append(p_norm)
+        gold_bio_all.append(gold_norm_seq)
+        pred_bio_all.append(to_bio(pred_norm_seq))
 
-            print()
+        # -----------------------------
+        # ENTITY‑LEVEL EVALUATOR
+        # -----------------------------
+        gold_ents = parse_bioes_tags(gold)
 
-            gold_bio_all.append(gold_norm_seq)
-            pred_bio_all.append(to_bio(pred_norm_seq))
+        # GLiNER labels are already INTERNAL → just convert to BIOES
+        pred_bioes = to_bio(pred_norm_seq)
+        pred_ents = parse_bioes_tags(pred_bioes)
+
+        evaluator.add(gold_ents, pred_ents)
 
     print(f"Accuracy: {correct}/{total} = {correct/total:.4f}")
 
@@ -193,6 +208,14 @@ def main():
     print(seqeval_report(gold_bio_all, pred_bio_all, digits=4))
     print("Span‑level F1:", seqeval_f1(gold_bio_all, pred_bio_all))
 
-    
+    # -----------------------------
+    # Evaluator summary
+    # -----------------------------
+    print("\n=== ENTITY‑LEVEL METRICS (Evaluator) ===\n")
+    result = evaluator.result()
+    print(result.summary())
+    print("\nMicro F1:", result.micro_f1)
+
+
 if __name__ == "__main__":
     main()
