@@ -253,7 +253,7 @@ class LoaderHistorical:
         if not text.strip():
             return None
 
-        # 1. Extract and trim spans for each annotator
+        # Extract and trim spans for each annotator
         annotator_spans = {}
         for ann in item.get('valid_annotations', []):
             ann_id = ann.get('completed_by', 'unknown')
@@ -284,7 +284,7 @@ class LoaderHistorical:
         if not annotator_spans:
             return None
 
-        # 2. Majority Vote Logic
+        # Majority Vote Logic
         num_annotators = len(annotator_spans)
         # Threshold: More than 50%. (e.g., 2 for 2, 2 for 3, 3 for 4)
         majority_threshold = (num_annotators // 2) + 1 
@@ -302,7 +302,7 @@ class LoaderHistorical:
             else:
                 discarded_spans.append((span, count))
 
-        # 3. Tokenize and apply BIOES using ONLY the majority-voted spans
+        # Tokenize and apply BIOES using ONLY the majority-voted spans
         return self._tokenize_and_align(text, kept_spans)
 
     def _tokenize_and_align(self, text: str, spans: List[Tuple[int, int, str]]) -> Tuple[List[str], List[str]]:
